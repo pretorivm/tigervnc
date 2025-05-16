@@ -3,55 +3,79 @@
 # Script para instalação automática do TigerVNC
 # Autor: Raimundo Junior
 # Data: 16/05/2025
+# Baseado no tutorial do idroot: https://idroot.us/install-vnc-server-ubuntu-24-04/
 
-# Função para verificar se o usuário é root
-verificar_root() {
-  if [ "$(id -u)" -ne 0 ]; then
-    echo "Este script precisa ser executado como root (sudo)."
-    exit 1
-  fi
-}
+# Verifica se o script está sendo executado como root
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Por favor, execute este script como root ou usando sudo."
+  exit 1
+fi
 
-# Função para instalar em sistemas Debian/Ubuntu
-instalar_debian() {
-  echo "Atualizando pacotes..."
-  apt update -y && apt upgrade -y
+# Atualiza os pacotes do sistema
+echo "Atualizando os pacotes do sistema..."
+apt update && apt upgrade -y
 
-  echo "Instalando TigerVNC..."
-  apt install -y tigervnc-standalone-server tigervnc-common
+# Instala o ambiente de desktop XFCE e o TigerVNC
+echo "Instalando o ambiente XFCE e o TigerVNC..."
+apt install -y xfce4 xfce4-goodies tigervnc-standalone-server
 
-  echo "TigerVNC instalado com sucesso no Debian/Ubuntu!"
-}
+# Solicita o nome de usuário para configurar o VNC
+read -p "Digite o nome de usuário para configurar o VNC: " usuario
 
-# Função para instalar em sistemas Red Hat/CentOS
-instalar_redhat() {
-  echo "Atualizando pacotes..."
-  yum update -y
+# Verifica se o usuário existe
+if id "$usuario" &>/dev/null; then
+  echo "Usuário encontrado: $usuario"
+else
+  echo "Usuário '$usuario' não encontrado. Criando o usuário..."
+  adduser "$usuario"
+fi
 
-  echo "Instalando TigerVNC..."
-  yum install -y tigervnc-server
+# Define a senha VNC para o usuário
+echo "Configurando a senha VNC para o usuário $usuario..."
+sudo -u "$usuario" vncpasswd
 
-  echo "TigerVNC instalado com sucesso no RHEL/CentOS!"
-}
+# Cria o diretório .vnc se não existir
+sudo -u "$usuario" mkdir -p /home/"$usuario"/.vnc
 
-# Função principal
-main() {
-  verificar_root
+# Cria o arquivo xstartup
+echo "Criando o arquivo xstartup..."
+cat <<EOF > /home/"$usuario"/.vnc/xstartup
+#!/bin/bash
+xrdb \$HOME/.Xresources
+startxfce4 &
+EOF
 
-  echo "Detectando o sistema operacional..."
-  if [ -f /etc/debian_version ]; then
-    instalar_debian
-  elif [ -f /etc/redhat-release ]; then
-    instalar_redhat
-  else
-    echo "Sistema operacional não suportado por este script."
-    exit 1
-  fi
+# Torna o xstartup executável
+chmod +x /home/"$usuario"/.vnc/xstartup
+chown "$usuario":"$usuario" /home/"$usuario"/.vnc/xstartup
 
-  echo ""
-  echo "Para iniciar o VNC Server, execute: vncserver"
-  echo "Para configurar uma senha, execute: vncpasswd"
-}
+# Cria o serviço systemd para o VNC
+echo "Criando o serviço systemd para o VNC..."
+cat <<EOF > /etc/systemd/system/vncserver@.service
+[Unit]
+Description=Serviço VNC para o display %i
+After=syslog.target network.target
 
-# Executa a função principal
-main
+[Service]
+Type=forking
+User=$usuario
+Group=$usuario
+WorkingDirectory=/home/$usuario
+
+PIDFile=/home/$usuario/.vnc/%H:%i.pid
+ExecStartPre=-/usr/bin/vncserver -kill :%i > /dev/null 2>&1
+ExecStart=/usr/bin/vncserver :%i -geometry 1280x800 -depth 24
+ExecStop=/usr/bin/vncserver -kill :%i
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Recarrega o systemd e habilita o serviço
+echo "Recarregando o systemd e habilitando o serviço VNC..."
+systemctl daemon-reload
+systemctl enable vncserver@1.service
+systemctl start vncserver@1.service
+
+echo "Instalação e configuração do TigerVNC concluídas com sucesso!"
+echo "Você pode se conectar ao VNC usando o IP do servidor e a porta 5901."
